@@ -1,0 +1,60 @@
+name: Build Yattee tvOS Sideload IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild \
+            -scheme Yattee \
+            -resolvePackageDependencies
+
+      - name: Build unsigned tvOS app
+        run: |
+          xcodebuild \
+            -scheme Yattee \
+            -configuration Release \
+            -sdk appletvos \
+            -destination 'generic/platform=tvOS' \
+            -derivedDataPath "$RUNNER_TEMP/YatteeDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package IPA
+        run: |
+          APP="$RUNNER_TEMP/YatteeDerivedData/Build/Products/Release-appletvos/Yattee.app"
+
+          if [ ! -d "$APP" ]; then
+            echo "Yattee.app not found"
+            find "$RUNNER_TEMP/YatteeDerivedData/Build/Products" -maxdepth 3 -type d -name '*.app'
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          ditto "$APP" "$RUNNER_TEMP/ipa/Payload/Yattee.app"
+
+          cd "$RUNNER_TEMP/ipa"
+          zip -qry "$GITHUB_WORKSPACE/Yattee-tvOS-sideload.ipa" Payload
+
+          ls -lh "$GITHUB_WORKSPACE/Yattee-tvOS-sideload.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yattee-tvOS-sideload
+          path: Yattee-tvOS-sideload.ipa
+          if-no-files-found: error
+          retention-days: 14
