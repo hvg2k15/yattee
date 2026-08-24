@@ -1,0 +1,91 @@
+name: Build QuietPlay tvOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout QuietPlay
+        uses: actions/checkout@v4
+        with:
+          repository: adampickering/quietplay
+          ref: main
+
+      - name: Configure backend
+        run: |
+          PLIST="ios/QuietPlay/Info.plist"
+
+          /usr/libexec/PlistBuddy \
+            -c "Set :QuietPlayAPIBaseURL http://quietplay.home.lan:30087" \
+            "$PLIST"
+
+          # Allow HTTP access to our LAN-hosted server
+          /usr/libexec/PlistBuddy \
+            -c "Add :NSAppTransportSecurity dict" \
+            "$PLIST" 2>/dev/null || true
+
+          /usr/libexec/PlistBuddy \
+            -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" \
+            "$PLIST" 2>/dev/null || \
+          /usr/libexec/PlistBuddy \
+            -c "Set :NSAppTransportSecurity:NSAllowsLocalNetworking true" \
+            "$PLIST"
+
+          /usr/libexec/PlistBuddy \
+            -c "Print :QuietPlayAPIBaseURL" \
+            "$PLIST"
+
+      - name: Build unsigned tvOS app
+        run: |
+          xcodebuild \
+            -project ios/QuietPlay/QuietPlay.xcodeproj \
+            -scheme QuietPlay \
+            -configuration Release \
+            -sdk appletvos \
+            -destination 'generic/platform=tvOS' \
+            -derivedDataPath "$RUNNER_TEMP/QuietPlayDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package IPA
+        run: |
+          APP="$(find "$RUNNER_TEMP/QuietPlayDerivedData/Build/Products" \
+            -type d -name 'QuietPlay.app' | head -1)"
+
+          echo "App: $APP"
+          test -n "$APP"
+          test -d "$APP"
+
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          ditto "$APP" "$RUNNER_TEMP/ipa/Payload/QuietPlay.app"
+
+          cd "$RUNNER_TEMP/ipa"
+          zip -qry "$GITHUB_WORKSPACE/QuietPlay-tvOS-sideload.ipa" Payload
+
+          ls -lh "$GITHUB_WORKSPACE/QuietPlay-tvOS-sideload.ipa"
+
+      - name: Get upstream SHA
+        id: version
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          echo "short=${SHA:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHORT: ${{ steps.version.outputs.short }}
+        run: |
+          gh release create "quietplay-main-$SHORT" \
+            "$GITHUB_WORKSPACE/QuietPlay-tvOS-sideload.ipa" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "QuietPlay tvOS $SHORT" \
+            --notes "Unsigned tvOS build configured for http://quietplay.home.lan:30087"
+
